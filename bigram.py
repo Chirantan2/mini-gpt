@@ -1,15 +1,32 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import argparse
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="train a bigram language model")
+    
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--block_size", type=int, default=8)
+    parser.add_argument("--max_iters", type=int, default=3000)
+    parser.add_argument("--eval_interval", type=int, default=300)
+    parser.add_argument("--learning_rate", type=float, default=1e-2)
+    parser.add_argument("--eval_iters", type=int, default=200)
+
+    return parser.parse_args()
+
+args = get_args()
 
 # hyperparameters 
-batch_size = 32
-block_size = 8
-max_iter = 3000
-eval_interval = 300
-learning_rate = 1e-2
+batch_size = args.batch_size
+block_size = args.block_size
+max_iters = args.max_iters
+eval_interval = args.eval_interval
+learning_rate = args.learning_rate
+eval_iters = args.eval_iters
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 200
 
 torch.manual_seed(1337)
 
@@ -45,7 +62,18 @@ def get_batch(split):
 
 @torch.no_grad()
 def estimate_loss():
-    pass
+    out = {}
+    model.eval() # sets model to eval state
+    for split in ["train", "val"]:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+
+    return out
 
 
 # bigram model 
@@ -84,3 +112,24 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
         
         return idx
+    
+model = BigramLanguageModel(vocab_size=vocab_size)
+m = model.to(device)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+for iter in range(max_iters):
+
+    if iter % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+    xb, yb = get_batch("train")
+
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
+context = torch.zeros((1,1), dtype=torch.long, device=device)
+print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
